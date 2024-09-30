@@ -3,6 +3,7 @@
 //
 #include "LocalLlama.hpp"
 
+#include <ac/llama/Session.hpp>
 #include <ac/llama/Instance.hpp>
 #include <ac/llama/Init.hpp>
 #include <ac/llama/Model.hpp>
@@ -21,15 +22,16 @@
 namespace ac::local {
 
 namespace {
-llama::Instance::SessionParams SessionParams_fromDict(const Dict& d) {
+llama::Instance::SessionParams SessionParams_fromDict(const Dict&) {
     llama::Instance::SessionParams ret;
-    Dict_optApplyValueAt(d, "apply_chat_format", ret.applyChatFormat);
     return ret;
 }
 
 class LlamaInstance final : public Instance {
     std::shared_ptr<llama::Model> m_model;
     llama::Instance m_instance;
+
+    std::vector<llama::Token> m_promptTokens;
 public:
     LlamaInstance(std::shared_ptr<llama::Model> model)
         : m_model(astl::move(model))
@@ -41,7 +43,9 @@ public:
         auto antiprompts = Dict_optValueAt(params, "antiprompts", std::vector<std::string>{});
         const auto maxTokens = Dict_optValueAt(params, "max_tokens", uint32_t(0));
 
-        auto s = m_instance.newSession(astl::move(prompt), SessionParams_fromDict(params));
+        m_promptTokens = m_instance.model().vocab().tokenize(prompt, true, true);
+        auto s = m_instance.newSession(SessionParams_fromDict(params));
+        s.setInitialPrompt(m_promptTokens);
 
         auto& model = m_instance.model();
         ac::llama::AntipromptManager antiprompt;

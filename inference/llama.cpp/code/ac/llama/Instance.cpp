@@ -4,7 +4,7 @@
 #include "Instance.hpp"
 #include "Model.hpp"
 #include "Logging.hpp"
-#include "ChatFormat.hpp"
+#include "Session.hpp"
 #include <llama.h>
 #include <astl/throw_ex.hpp>
 #include <astl/iile.h>
@@ -82,7 +82,10 @@ void Instance::warmup() {
     llama_perf_context_reset(lctx);
 }
 
-Session Instance::newSession(std::string initialPrompt, const SessionParams params) {
+Session Instance::newSession(const SessionParams params) {
+    // see comments in Session::promiseType::initial_suspend on why this silly await is necessary
+    auto initialPrompt = co_await Session::Prompt{};
+
     if (m_hasActiveSession) {
         throw_ex{} << "Instance already has an active session";
     }
@@ -98,41 +101,25 @@ Session Instance::newSession(std::string initialPrompt, const SessionParams para
     m_sampler.reset();
     m_sampler.perfReset();
 
-    ChatFormat chatFmt(m_model.getChatTemplateId());
-    std::vector<ChatMsg> chatMsgs;
-    auto chatAddAndFormat = [&](std::string role, std::string text) {
-        ChatMsg newMsg = {astl::move(role), astl::move(text)};
-        auto ret = chatFmt.formatMsg(newMsg, chatMsgs, newMsg.role == "user");
-        chatMsgs.push_back(astl::move(newMsg));
-        return ret;
-    };
+    Token initialToken; // used to reset the initial prompt to a single token
 
-    std::vector<Token> tokens;
     if (initialPrompt.empty()) {
         // Should not run without any tokens
-        tokens.push_back(llama_token_bos(m_model.lmodel()));
-    }
-    else {
-        if (params.applyChatFormat) {
-            auto fmtChat = chatAddAndFormat("system", astl::move(initialPrompt));
-            tokens = vocab.tokenize(fmtChat, true, true);
-        }
-        else {
-            tokens = vocab.tokenize(initialPrompt, true, true);
-        }
+        initialToken = llama_token_bos(m_model.lmodel());
+        initialPrompt = {&initialToken, 1};
     }
 
-    if (tokens.empty()) {
+    if (initialPrompt.empty()) {
         throw_ex{} << "Empty initial prompt";
     }
 
     const auto ctxLen = llama_n_ctx(lctx);
     const auto maxTokens = ctxLen - 4; // ref #16
-    if (tokens.size() > maxTokens) {
-        throw_ex{} << "Input too long. Got " << tokens.size() << " tokens, max: " << ctxLen - 4;
+    if (initialPrompt.size() > maxTokens) {
+        throw_ex{} << "Initial prompt too long. Got " << initialPrompt.size() << " tokens, max: " << ctxLen - 4;
     }
 
-    const auto numKeep = int32_t(tokens.size()); // number of tokens to keep in the context in case we overflow
+    const auto numKeep = int32_t(initialPrompt.size()); // number of tokens to keep in the context in case we overflow
 
     if (params.gaFactor != 1) {
         const uint32_t gaFactor = params.gaFactor;
@@ -144,13 +131,17 @@ Session Instance::newSession(std::string initialPrompt, const SessionParams para
     }
 
     if (m_model.hasEncoder()) {
-        auto batch = llama_batch_get_one(tokens.data(), int32_t(tokens.size()), 0, 0);
+        // well llama_encode does not touch the tokens, but llama_batch needs them to be non-const
+        // (mostly for stupid C reasons)
+        // so... we have to do something evil here
+        auto nonConstTokens = const_cast<Token*>(initialPrompt.data());
+        auto batch = llama_batch_get_one(nonConstTokens, int32_t(initialPrompt.size()), 0, 0);
         auto res = llama_encode(lctx, batch);
         if (res != 0) {
             throw_ex{} << "Failed to encode input";
         }
-        tokens.clear();
-        tokens.push_back(vocab.decoderStartToken());
+        initialToken = vocab.decoderStartToken();
+        initialPrompt = {&initialToken, 1};
     }
 
     // group attention state
@@ -163,7 +154,7 @@ Session Instance::newSession(std::string initialPrompt, const SessionParams para
         Generated
     };
 
-    auto doDecode = [&](std::span<Token> tokens, Source src) {
+    auto doDecode = [&](std::span<const Token> tokens, Source src) {
         // first try to expand the context if needed
         const auto gaFactor = params.gaFactor;
 
@@ -239,7 +230,11 @@ Session Instance::newSession(std::string initialPrompt, const SessionParams para
             auto batchTokens = tokens.size() > batchSize ? tokens.first(batchSize) : tokens;
             tokens = tokens.subspan(batchTokens.size());
 
-            auto batch = llama_batch_get_one(batchTokens.data(), int(batchTokens.size()), numPast, 0);
+            // well llama_decode does not touch the tokens, but llama_batch needs them to be non-const
+            // (mostly for stupid C reasons)
+            // so... we have to do something evil here
+            auto nonConstTokens = const_cast<Token*>(batchTokens.data());
+            auto batch = llama_batch_get_one(nonConstTokens, int(batchTokens.size()), numPast, 0);
             if (llama_decode(lctx, batch) != 0) {
                 throw_ex{} << "Failed to decode tokens";
             }
@@ -247,31 +242,28 @@ Session Instance::newSession(std::string initialPrompt, const SessionParams para
         }
     };
 
-    doDecode(tokens, Source::InitialPrompt);
+    doDecode(initialPrompt, Source::InitialPrompt);
+    initialPrompt = {}; // clear as after the co_await below the memory may be invalid
+
+    co_await Session::StartGeneration{}; // suspend pre generation
 
     while (true) {
-        auto& prompt = co_await Session::Prompt{};
+        auto prompt = co_await Session::Prompt{};
         if (!prompt.empty()) {
-            if (params.applyChatFormat) {
-                chatAddAndFormat("assistant", "msg");
-                auto fmtChat = chatAddAndFormat("user", prompt);
-                tokens = vocab.tokenize(fmtChat, false, true);
-            }
-            else {
-                tokens = vocab.tokenize(prompt, false, false);
-            }
 
             // reset sampling and don't allow previous inputs to affect the generation
             m_sampler.reset();
 
-            doDecode(tokens, Source::InteractivePrompt);
+            doDecode(prompt, Source::InteractivePrompt);
         }
 
         auto token = m_sampler.sample(lctx);
         if (vocab.isEog(token)) {
             co_yield Token_Invalid;
+            // don't decode eog tokens in case the the interaction is continued
         }
         else {
+            // first yield, then decode, thus we don't decode if the session is aborted
             co_yield token;
             doDecode({&token, 1}, Source::Generated);
         }

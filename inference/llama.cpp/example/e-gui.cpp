@@ -4,6 +4,7 @@
 #include <ac/llama/Init.hpp>
 #include <ac/llama/Model.hpp>
 #include <ac/llama/Instance.hpp>
+#include <ac/llama/Session.hpp>
 #include <ac/llama/AntipromptManager.hpp>
 
 #include <imgui.h>
@@ -76,12 +77,14 @@ public:
 
             class Session {
             public:
-                Session(ac::llama::Instance& instance, std::string prompt, std::vector<std::string> antiprompts, ac::llama::Instance::SessionParams params)
+                Session(ac::llama::Instance& instance, std::string_view prompt, std::vector<std::string> antiprompts, ac::llama::Instance::SessionParams params)
                     : m_vocab(instance.model().vocab())
                     , m_params(std::move(params))
                     , m_text(std::move(prompt))
-                    , m_session(instance.newSession(m_text, m_params))
+                    , m_session(instance.newSession(m_params))
                 {
+                    m_promptTokens = m_vocab.tokenize(m_text, true, true);
+                    m_session.setInitialPrompt(m_promptTokens);
                     for (const auto& ap : antiprompts) {
                         m_antiprompt.addAntiprompt(ap);
                     }
@@ -114,16 +117,18 @@ public:
                     m_numTokens = numTokens;
                 }
 
-                void pushPrompt(std::string prompt) {
+                void pushPrompt(std::string_view prompt) {
                     m_text += "[";
                     m_text += prompt;
                     m_text += "]";
-                    m_session.pushPrompt(prompt);
+                    m_promptTokens = m_vocab.tokenize(prompt, false, true);
+                    m_session.pushPrompt(m_promptTokens);
                 }
 
             private:
                 const ac::llama::Vocab& m_vocab;
                 ac::llama::Instance::SessionParams m_params;
+                std::vector<ac::llama::Token> m_promptTokens;
                 std::string m_text;
                 ac::llama::Session m_session;
                 ac::llama::AntipromptManager m_antiprompt;
@@ -133,7 +138,7 @@ public:
             const std::string& name() const { return m_name; }
             Session* session() { return m_session.get(); }
 
-            void startSession(std::string prompt, std::vector<std::string> antiprompts, ac::llama::Instance::SessionParams params) {
+            void startSession(std::string_view prompt, std::vector<std::string> antiprompts, ac::llama::Instance::SessionParams params) {
                 m_session.reset(new Session(m_instance, prompt, antiprompts, params));
             }
 
@@ -357,8 +362,8 @@ int main(int, char**) {
                 if (auto session = selectedInstance->session()) {
                     session->update();
                     ImGui::Text("Session");
-                    ImGui::TextWrapped("Params: applyChatFormat=%d, gaFactor=%d, gaWidth=%d, infiniteContext=%d",
-                        session->params().applyChatFormat, session->params().gaFactor, session->params().gaWidth, session->params().infiniteContext);
+                    ImGui::TextWrapped("Params: gaFactor=%d, gaWidth=%d, infiniteContext=%d",
+                        session->params().gaFactor, session->params().gaWidth, session->params().infiniteContext);
 
                     ImGui::Separator();
                     ImGui::TextWrapped("%s", session->text().c_str());
@@ -383,7 +388,6 @@ int main(int, char**) {
                 else {
                     ImGui::Text("New session");
                     ImGui::Separator();
-                    ImGui::Checkbox("Apply chat format", &newSessionParams.applyChatFormat);
                     ImGui::InputScalar("gaFactor", ImGuiDataType_U32, &newSessionParams.gaFactor);
                     ImGui::InputScalar("gaWidth", ImGuiDataType_U32, &newSessionParams.gaWidth);
                     ImGui::Checkbox("infiniteContext", &newSessionParams.infiniteContext);

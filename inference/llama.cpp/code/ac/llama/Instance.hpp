@@ -3,7 +3,6 @@
 //
 #pragma once
 #include "export.h"
-#include "Session.hpp"
 #include "Sampler.hpp"
 #include <astl/mem_ext.hpp>
 
@@ -11,6 +10,8 @@ struct llama_context;
 
 namespace ac::llama {
 class Model;
+class Session;
+class StringSession;
 
 class AC_LLAMA_EXPORT Instance {
 public:
@@ -27,8 +28,6 @@ public:
     void warmup();
 
     struct SessionParams {
-        bool applyChatFormat = false;
-
         uint32_t gaFactor = 1; // group-attention factor
         uint32_t gaWidth = 512; // group-attention width
 
@@ -37,8 +36,8 @@ public:
         bool infiniteContext = true;
     };
 
-    // only one session per job can be active at a time
-    Session newSession(std::string initialPrompt, const SessionParams params);
+    // only one session per instance can be active at a time
+    Session newSession(const SessionParams params);
 
     const Model& model() const noexcept { return m_model; }
     const Sampler& sampler() const noexcept { return m_sampler; }

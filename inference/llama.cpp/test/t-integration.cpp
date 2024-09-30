@@ -4,6 +4,7 @@
 #include <ac/llama/Init.hpp>
 #include <ac/llama/Model.hpp>
 #include <ac/llama/Instance.hpp>
+#include <ac/llama/Session.hpp>
 
 #include <doctest/doctest.h>
 
@@ -55,8 +56,12 @@ TEST_CASE("inference") {
         ac::llama::Instance inst(model, {});
         inst.warmup(); // should be safe
 
+        std::vector<ac::llama::Token> tokens;
+
         // choose a very, very suggestive prompt and hope that all architectures will agree
-        auto s = inst.newSession("President George W.", {});
+        auto s = inst.newSession({});
+        tokens = model.vocab().tokenize("President George W.", true, true);
+        s.setInitialPrompt(tokens);
         {
             auto t = s.getToken();
             REQUIRE(t != ac::llama::Token_Invalid);
@@ -65,7 +70,8 @@ TEST_CASE("inference") {
         }
 
         // add more very suggestive stuff
-        s.pushPrompt(" sent troops to Cleveland which was hit by torrential");
+        tokens = model.vocab().tokenize(" sent troops to Cleveland which was hit by torrential", false, false);
+        s.pushPrompt(tokens);
         {
             auto t = s.getToken();
             REQUIRE(t != ac::llama::Token_Invalid);

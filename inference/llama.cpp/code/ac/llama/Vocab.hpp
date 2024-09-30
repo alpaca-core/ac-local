@@ -12,7 +12,7 @@ namespace ac::llama {
 
 class Model;
 
-struct AC_LLAMA_EXPORT Vocab {
+class AC_LLAMA_EXPORT Vocab {
 public:
     Vocab(const Model& model);
     ~Vocab();

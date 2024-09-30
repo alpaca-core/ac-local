@@ -6,133 +6,161 @@
 #include <vector>
 #include <deque>
 
+using namespace ac::llama;
+using TokenVec = std::vector<Token>;
+
 // the session is a coroutine wrapper
 // we can test it in isolation with a fake instance (no actual AI inference going on)
 // in this case we create a coroutine which:
 // * receives an initial prompt
-// * for every awaited additional prompt, it splits it into words and yields the length of the initial prompt and then
-//   the length of each word
-std::vector<std::string> splitToWords(std::string_view text) {
-    std::vector<std::string> ret;
+// * for every subsequent prompt, it yields the sum of prompt tokens and the initial prompt tokens (zipped, wrapped)
 
-    while (true) {
-        auto pos = text.find(' ');
-        if (pos == std::string::npos) {
-            ret.push_back(std::string(text));
-            break;
-        }
-        ret.push_back(std::string(text.substr(0, pos)));
-        text = text.substr(pos + 1);
+Session TestSession() {
+    auto initialPrompt = co_await Session::Prompt{};
+
+    if (initialPrompt.empty()) {
+        throw std::runtime_error("empty");
     }
 
-    return ret;
-}
+    const TokenVec initial(initialPrompt.begin(), initialPrompt.end());
+    auto iiter = initial.begin();
 
-ac::llama::Session TestSession(std::string initialPrompt) {
-    const auto initial = splitToWords(initialPrompt);
-
-    std::deque<std::string> current(initial.begin(), initial.end());
+    initialPrompt = {};
 
     bool yieldedInvalid = false;
 
+    co_await Session::StartGeneration{};
+
+    std::deque<Token> current;
+    current.push_back(Token(initial.size()));
+
     while (true) {
-        auto& prompt = co_await ac::llama::Session::Prompt{};
+        auto prompt = co_await Session::Prompt{};
 
         if (prompt.empty()) {
             if (current.empty() && yieldedInvalid) {
-                current.push_back("ok one more");
-                yieldedInvalid = false;
+                current.push_back(1); // ok one more
             }
         }
         else {
-            current.assign(initial.begin(), initial.end());
-            auto split = splitToWords(prompt);
-            current.insert(current.end(), split.begin(), split.end());
-            yieldedInvalid = false;
+            // rewrite current
+            current.assign(prompt.begin(), prompt.end());
         }
 
+        yieldedInvalid = false;
+
         if (current.empty()) {
-            co_yield ac::llama::Token_Invalid;
+            co_yield Token_Invalid;
             yieldedInvalid = true;
         }
         else {
-            if (current.front() == "throw") {
+            if (current.front() == 0xBADF00D) {
                 throw std::runtime_error("test exception");
             }
-            co_yield ac::llama::Token(current.front().size());
+            co_yield current.front() + *iiter; // zip
             current.pop_front();
+            ++iiter;
+            if (iiter == initial.end()) {
+                // wrap
+                iiter = initial.begin();
+            }
         }
     }
 }
 
-
-TEST_CASE("split") {
-    // test the test code
-    CHECK(splitToWords("the sky is blue") == std::vector<std::string>{"the", "sky", "is", "blue"});
-    CHECK(splitToWords("42") == std::vector<std::string>{"42"});
-    CHECK(splitToWords("") == std::vector<std::string>{""});
+TEST_CASE("session default") {
+    Session s;
+    CHECK(!s);
 }
 
-TEST_CASE("session") {
-    {
-        ac::llama::Session s;
-        CHECK(!s);
-    }
+TEST_CASE("session empty initial") {
+    auto s = TestSession();
+    CHECK_THROWS_WITH(s.setInitialPrompt({}), "empty");
+}
+
+TEST_CASE("session no push") {
+    Session s = TestSession();
 
     {
-        auto session = TestSession("i am");
-        CHECK(session);
-
-        CHECK(session.getToken() == 1);
-        CHECK(session.getToken() == 2);
-        CHECK(session.getToken() == ac::llama::Token_Invalid);
-        CHECK(session.getToken() == 11);
-        CHECK(session.getToken() == ac::llama::Token_Invalid);
-
-        session.pushPrompt("red panda");
-        CHECK(session.getToken() == 1);
-        CHECK(session.getToken() == 2);
-        CHECK(session.getToken() == 3);
-        CHECK(session.getToken() == 5);
-        CHECK(session.getToken() == ac::llama::Token_Invalid);
-        CHECK(session.getToken() == 11);
-        CHECK(session.getToken() == ac::llama::Token_Invalid);
-
-        session.pushPrompt("green hornet");
-        CHECK(session.getToken() == 1);
-        CHECK(session.getToken() == 2);
-        CHECK(session.getToken() == 5);
-
-        session.pushPrompt("ignore this one");
-        session.pushPrompt("blue whale");
-        CHECK(session.getToken() == 1);
-        CHECK(session.getToken() == 2);
-        CHECK(session.getToken() == 4);
+        TokenVec initialPrompt = {1, 2, 3};
+        s.setInitialPrompt(initialPrompt);
     }
+
+    REQUIRE(s);
+
+    CHECK(s.getToken() == 4);
+    CHECK(s.getToken() == Token_Invalid);
+    CHECK(s.getToken() == 3);
+    CHECK(s.getToken() == Token_Invalid);
+    CHECK(s.getToken() == 4);
+    CHECK(s.getToken() == Token_Invalid);
+    CHECK(s.getToken() == 2);
+    CHECK(s.getToken() == Token_Invalid);
+}
+
+TEST_CASE("session push") {
+    Session s = TestSession();
 
     {
-        auto session = TestSession("he isn't");
-        session.pushPrompt("a dog");
-        CHECK(session.getToken() == 2);
-        CHECK(session.getToken() == 5);
-        CHECK(session.getToken() == 1);
-        CHECK(session.getToken() == 3);
-        CHECK(session.getToken() == ac::llama::Token_Invalid);
-        CHECK(session.getToken() == 11);
-        CHECK(session.getToken() == ac::llama::Token_Invalid);
-
-        session = TestSession("aaa a");
-        CHECK(session.getToken() == 3);
+        TokenVec initialPrompt = {1, 2, 3};
+        s.setInitialPrompt(initialPrompt);
     }
+
+    REQUIRE(s);
+
+    TokenVec prompt = {4, 5};
+    s.pushPrompt(prompt);
+    CHECK(s.getToken() == 5);
+    CHECK(s.getToken() == 7);
+    CHECK(s.getToken() == Token_Invalid);
+
+    prompt = {10, 20, 30, 40};
+
+    s.pushPrompt(prompt);
+    CHECK(s.getToken() == 13);
+
+    prompt.clear(); // safe to destroy after first getToken
+
+    CHECK(s.getToken() == 21);
+
+    SUBCASE("no replace") {
+        CHECK(s.getToken() == 32);
+        CHECK(s.getToken() == 43);
+        CHECK(s.getToken() == Token_Invalid);
+    }
+    SUBCASE("replace") {
+        prompt = {100, 200};
+        s.pushPrompt(prompt);
+        CHECK(s.getToken() == 102);
+        CHECK(s.getToken() == 203);
+        CHECK(s.getToken() == Token_Invalid);
+    }
+
+    CHECK(s.getToken() == 2);
+    CHECK(s.getToken() == Token_Invalid);
 }
 
 TEST_CASE("exceptions") {
-    auto session = TestSession("i am throw");
-    CHECK(session.getToken() == 1);
-    CHECK(session.getToken() == 2);
-    CHECK_THROWS_WITH_AS(session.getToken(), "test exception", std::runtime_error);
-    CHECK(session.getToken() == -1);
+    Session s = TestSession();
 
-    session.pushPrompt("red panda");
-    CHECK(session.getToken() == -1); // dead
+    SUBCASE("empty initial") {
+        CHECK_THROWS_WITH(s.setInitialPrompt({}), "empty");
+    }
+    SUBCASE("bad prompt") {
+        {
+            TokenVec initialPrompt = { 1, 2, 3 };
+            s.setInitialPrompt(initialPrompt);
+        }
+
+        REQUIRE(s);
+
+        TokenVec prompt = { 4, 0xBADF00D };
+        s.pushPrompt(prompt);
+        CHECK(s.getToken() == 5);
+        CHECK_THROWS_WITH(s.getToken(), "test exception");
+    }
+
+    // everything is invalid from now on
+    CHECK(s.getToken() == Token_Invalid);
+    CHECK(s.getToken() == Token_Invalid);
 }

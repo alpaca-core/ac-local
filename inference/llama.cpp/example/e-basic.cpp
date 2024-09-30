@@ -8,6 +8,7 @@
 #include <ac/llama/Init.hpp>
 #include <ac/llama/Model.hpp>
 #include <ac/llama/Instance.hpp>
+#include <ac/llama/Session.hpp>
 
 // logging
 #include <jalog/Instance.hpp>
@@ -51,7 +52,8 @@ int main() try {
     std::cout << "Prompt: " << prompt << "\n";
 
     // start session
-    auto session = instance.newSession(prompt, {});
+    auto session = instance.newSession({});
+    session.setInitialPrompt(model.vocab().tokenize(prompt, true, true));
 
     // generate and print 100 tokens
     for (int i = 0; i < 100; ++i) {
