@@ -7,6 +7,11 @@ public enum DictConvertError: Error, Equatable {
     case invalidType(String)
 }
 
+/// Converts a Swift dictionary to an `AC.DictRoot` format, suitable for the native C++ code.
+///
+/// - Parameter dictionary: The Swift dictionary to convert.
+/// - Throws: `DictConvertError.invalidType` if an unsupported type is encountered in the dictionary.
+/// - Returns: An `AC.DictRoot` object representing the converted dictionary.
 public func translateDictionaryToDict(_ dictionary: Dictionary<String, Any>) throws -> AC.DictRoot {
     // Create the root dictionary object
     // var dictRoot = AC.DictRoot.create()
@@ -53,6 +58,11 @@ public func translateDictionaryToDict(_ dictionary: Dictionary<String, Any>) thr
     return dictRoot
 }
 
+/// Converts an `AC.DictRef` dictionary format back into a Swift dictionary.
+///
+/// - Parameter dict: The `AC.DictRef` dictionary to convert.
+/// - Throws: `DictConvertError.invalidType` if an unsupported type is encountered in the dictionary.
+/// - Returns: A Swift dictionary representing the converted data.
 public func translateDictToDictionary(_ dict: AC.DictRef) throws -> Dictionary<String, Any> {
     var dictionary: Dictionary<String, Any> = Dictionary<String, Any>()
 

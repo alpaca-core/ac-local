@@ -9,6 +9,7 @@ public enum ACError: Error, Equatable {
     case invalidRunOp(String)
 }
 
+/// Initializes the AlpacaCore native SDK
 public func initSDK() {
     AC.initSDK()
 }
@@ -43,6 +44,19 @@ func callObserver(observer: UnsafeMutableRawPointer,
     }
 }
 
+/// Creates a model with the specified description and parameters, with optional progress tracking.
+///
+/// - Parameters:
+///   - desc: A model description.
+///   - params: A dictionary of parameters.
+///   - progress: An optional closure for progress updates during model creation.
+///               The closure parameters are:
+///               - `String`: A description of the current progress step.
+///               - `Float`: A value from 0.0 to 1.0 indicating the completion percentage.
+///
+/// - Throws: `ACError.invalidModelCreation` if the model creation process encounters an error.
+///
+/// - Returns: A `Model` instance representing the newly created model.
 public func createModel(_ desc: inout ModelDesc, _ params: Dictionary<String, Any>,
                         _ progress: Optional<(String, Float) -> Void> = nil) throws -> Model {
     let paramsAsDict = try translateDictionaryToDict(params)
@@ -60,6 +74,7 @@ public func createModel(_ desc: inout ModelDesc, _ params: Dictionary<String, An
     return Model(result.consumeValue())
 }
 
+/// A wrapper class for the native `AC.Model` object, providing functionality to create new `Instance`.
 public class Model {
     var model: AC.Model
 
@@ -67,9 +82,18 @@ public class Model {
         self.model = model
     }
 
-    public func createInstance(_ name: String, _ params: Dictionary<String, Any>) throws -> Instance {
+    /// Creates an `Instance` from the specified name and parameters.
+    ///
+    /// - Parameters:
+    ///   - type: The type of the instance to create.
+    ///   - params: A dictionary of parameters to pass for the instance creation.
+    ///
+    /// - Throws: `ACError.invalidInstanceCreation` if the instance creation fails.
+    ///
+    /// - Returns: An `Instance` representing the newly created instance.
+    public func createInstance(_ type: String, _ params: Dictionary<String, Any>) throws -> Instance {
         let paramsAsDict = try translateDictionaryToDict(params)
-        var result = model.createInstance(std.string(name), paramsAsDict.getRef())
+        var result = model.createInstance(std.string(type), paramsAsDict.getRef())
         if result.hasError() {
             throw ACError.invalidInstanceCreation(String(result.error()))
         }
@@ -77,6 +101,7 @@ public class Model {
     }
 }
 
+/// A wrapper class for native `AC.Instance` object, providing functionality to run operations with progress tracking.
 public class Instance {
     var instance: AC.Instance
 
@@ -84,6 +109,19 @@ public class Instance {
         self.instance = instance
     }
 
+    /// Runs an operation on the `instance` with the provided operation name, parameters, and optional progress callback.
+    ///
+    /// - Parameters:
+    ///   - op: The name of the operation to execute.
+    ///   - params: A dictionary of parameters to pass to the operation.
+    ///   - progress: An optional closure that is called with updates on the operation's progress.
+    ///               The closure parameters are:
+    ///               - `String`: A description of the current progress step.
+    ///               - `Float`: A value from 0.0 to 1.0 indicating the completion percentage.
+    ///
+    /// - Throws: An `ACError.invalidRunOp` error if the operation fails.
+    ///
+    /// - Returns: A dictionary containing the results of the operation.
     public func runOp(_ op: String, _ params: Dictionary<String, Any>,
                       _ progress: Optional<(String, Float) -> Void> = nil) throws -> Dictionary<String, Any> {
         let paramsAsDict = try translateDictionaryToDict(params)

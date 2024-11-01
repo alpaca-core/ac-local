@@ -24,7 +24,7 @@ set_target_properties(AlpacaCoreSwift PROPERTIES COMPILE_OPTIONS "")
 
 target_compile_options(AlpacaCoreSwift
     PUBLIC
-        $<$<COMPILE_LANGUAGE:Swift>:-cxx-interoperability-mode=default -Xcc -std=c++20>
+        $<$<COMPILE_LANGUAGE:Swift>:-cxx-interoperability-mode=default -Xcc -std=c++20 -emit-symbol-graph -emit-symbol-graph-dir "${CMAKE_BINARY_DIR}/../../doc/swift/symbol-graph">
 )
 
 target_include_directories(AlpacaCoreSwift PUBLIC .)
